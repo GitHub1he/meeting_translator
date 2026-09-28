@@ -29,6 +29,8 @@
       "stop_s2t": "⏹ Stop S2T Service",
       "subtitle_window": "📺 Subtitle Window",
       "hide_subtitle": "🔳 Hide Subtitle",
+      "context_assistant": "🧠 Summary Assistant",
+      "hide_context": "🧠 Hide Assistant",
       "start_s2s": "🚀 Start S2S Service",
       "stop_s2s": "⏹ Stop S2S Service",
       "voice_preview": "▶ Preview",
@@ -48,7 +50,8 @@
       "start_time": "Start Time:",
       "end_time": "End Time:",
       "duration": "Duration:",
-      "minutes": "minutes"
+      "minutes": "minutes",
+      "drag_hint": "Drag to move window"
     },
     "messages": {
       "same_language_error": "My language cannot be the same as meeting language",
@@ -196,7 +199,7 @@
     "checking_voice_samples": "Checking {provider} voice samples...",
     "voice_sample_skip": "  [SKIP] {provider} has no supported voices",
     "dependency_rollback": "Missing dependency, rolled back to original provider: {provider}",
-    "context_assistant_started": "Context Assistant started (F1 Explain F2 Exp F3 Ammo F4 Reply)"
+    "context_assistant_started": "Summary Assistant started (F1 Explain F2 Exp F3 Ammo F4 Reply)"
   },
   "warnings": {
     "stylesheet_load_failed": "Unable to load stylesheet: {error}, using default style",

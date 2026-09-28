@@ -266,6 +266,7 @@ class QwenClient(BaseTranslationClient):
             await self.ws.send(json.dumps(event))
         except Exception as e:
             self.output_error(f"发送音频块失败: {e}")
+            self.is_connected = False
 
     async def handle_server_messages(self, on_text_received=None):
         """处理服务器消息"""
@@ -505,4 +506,3 @@ class QwenClient(BaseTranslationClient):
             return asyncio.run(_generate())
         except (KeyboardInterrupt, Exception):
             return ""
-

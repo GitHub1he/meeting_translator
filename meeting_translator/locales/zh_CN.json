@@ -29,6 +29,8 @@
       "stop_s2t": "⏹ 停止 S2T 服务",
       "subtitle_window": "📺 字幕窗口",
       "hide_subtitle": "🔳 隐藏字幕",
+      "context_assistant": "🧠 总结助手",
+      "hide_context": "🧠 隐藏助手",
       "start_s2s": "🚀 启动 S2S 服务",
       "stop_s2s": "⏹ 停止 S2S 服务",
       "voice_preview": "▶ 试听",
@@ -48,7 +50,8 @@
       "start_time": "开始时间:",
       "end_time": "结束时间:",
       "duration": "会议时长:",
-      "minutes": "分钟"
+      "minutes": "分钟",
+      "drag_hint": "按住拖动窗口"
     },
     "messages": {
       "same_language_error": "我的语言不能与会议语言相同",
@@ -203,7 +206,7 @@
     "checking_voice_samples": "检查 {provider} 音色样本...",
     "voice_sample_skip": "  [SKIP] {provider} 没有支持的音色",
     "dependency_rollback": "依赖缺失，已回滚到原提供商: {provider}",
-    "context_assistant_started": "背景助手已启动 (F1解释 F2经验 F3弹药 F4回复)"
+    "context_assistant_started": "总结助手已启动 (F1解释 F2经验 F3弹药 F4回复)"
   },
   "warnings": {
     "stylesheet_load_failed": "无法加载样式表: {error}，使用默认样式",

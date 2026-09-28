@@ -35,6 +35,7 @@ class ContextSidebar(QWidget):
         }
 
         self.drag_position = None
+        self.on_visibility_changed = None
         self._init_ui()
         self.resize(350, 420)
         self.setMinimumSize(300, 300)
@@ -60,7 +61,7 @@ class ContextSidebar(QWidget):
 
         title_bar = QHBoxLayout()
         title_bar.setSpacing(6)
-        title_label = QLabel("Context Assistant")
+        title_label = QLabel("Summary Assistant")
         title_label.setStyleSheet("color: rgba(200, 210, 255, 0.95); font-size: 13px; font-weight: bold; border: none;")
         title_bar.addWidget(title_label)
         title_bar.addStretch()
@@ -273,3 +274,13 @@ class ContextSidebar(QWidget):
 
     def mouseReleaseEvent(self, event):
         self.drag_position = None
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if callable(self.on_visibility_changed):
+            self.on_visibility_changed(True)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if callable(self.on_visibility_changed):
+            self.on_visibility_changed(False)

@@ -14,6 +14,33 @@ from output_manager import Out
 from i18n import get_i18n
 
 
+class _DragHandle(QPushButton):
+    """按住可拖动其所在窗口的手柄按钮。"""
+
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self._drag_pos = None
+        self.setCursor(Qt.SizeAllCursor)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_pos = event.globalPos() - self.window().frameGeometry().topLeft()
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if event.buttons() == Qt.LeftButton and self._drag_pos is not None:
+            self.window().move(event.globalPos() - self._drag_pos)
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_pos = None
+        super().mouseReleaseEvent(event)
+
+
 class SubtitleWindow(QWidget):
     """字幕悬浮窗"""
 
@@ -53,6 +80,9 @@ class SubtitleWindow(QWidget):
 
         # 拖动相关
         self.drag_position = None
+
+        # 显隐变化回调（供主窗口同步按钮文案），签名: callback(visible: bool)
+        self.on_visibility_changed = None
 
         # 设置初始大小和位置
         self.resize(900, 300)  # 增大初始尺寸：1200x400
@@ -102,6 +132,48 @@ class SubtitleWindow(QWidget):
 
         # 添加弹性空间，把控件推到右边
         control_bar.addStretch()
+
+        # 拖动手柄按钮（按住拖动整个窗口）
+        self.drag_btn = _DragHandle("✥")
+        self.drag_btn.setFixedSize(40, 30)
+        self.drag_btn.setToolTip(self.i18n.t("ui.subtitle.drag_hint"))
+        self.drag_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(100, 150, 255, 150);
+                border: 2px solid rgba(255, 255, 255, 180);
+                border-radius: 5px;
+                color: white;
+                font-weight: bold;
+                font-size: 16px;
+            }
+            QPushButton:hover {
+                background-color: rgba(120, 170, 255, 200);
+            }
+        """)
+        control_bar.addWidget(self.drag_btn)
+
+        # 关闭（隐藏）按钮
+        self.close_btn = QPushButton("✕")
+        self.close_btn.setFixedSize(40, 30)
+        self.close_btn.setToolTip(self.i18n.t("ui.buttons.hide_subtitle"))
+        self.close_btn.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(255, 255, 255, 40);
+                border: 2px solid rgba(255, 255, 255, 180);
+                border-radius: 5px;
+                color: white;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: rgba(231, 76, 60, 200);
+            }
+            QPushButton:pressed {
+                background-color: rgba(192, 57, 43, 200);
+            }
+        """)
+        self.close_btn.clicked.connect(self.hide)
+        control_bar.addWidget(self.close_btn)
 
         # 字体减小按钮
         self.font_decrease_btn = QPushButton("A-")
@@ -398,6 +470,16 @@ class SubtitleWindow(QWidget):
     def mouseReleaseEvent(self, event):
         """鼠标释放事件"""
         self.drag_position = None
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if callable(self.on_visibility_changed):
+            self.on_visibility_changed(True)
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if callable(self.on_visibility_changed):
+            self.on_visibility_changed(False)
 
     def mouseDoubleClickEvent(self, event):
         """鼠标双击事件（清空字幕）"""

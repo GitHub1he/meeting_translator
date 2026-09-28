@@ -252,19 +252,18 @@ class AudioOutputThread:
             # 先尝试非阻塞写入
             self.audio_queue.put_nowait(audio_data)
         except queue.Full:
-            # 队列满时，使用短超时的阻塞写入
+            # 实时翻译优先保证低延迟；丢弃最旧音频，而不是阻塞并持续积压。
             try:
-                self.audio_queue.put(audio_data, timeout=2.0)
-
-                # 记录队列满的情况
+                self.audio_queue.get_nowait()
+                self.audio_queue.task_done()
+                self.audio_queue.put_nowait(audio_data)
                 self.queue_full_warnings += 1
                 if self.queue_full_warnings % 50 == 1:
                     Out.warning(
-                        f"音频输出队列已满 {self.queue_full_warnings} 次，使用阻塞写入保证完整性（可能略有延迟）"
+                        f"音频输出队列已满 {self.queue_full_warnings} 次，已丢弃最旧音频以保持实时性"
                     )
             except queue.Full:
-                # 如果 2 秒后仍然无法写入，说明播放严重滞后，记录错误
-                Out.error("音频输出队列持续满载，无法写入音频块")
+                pass
 
     def _resample_audio(self, audio_data: bytes, state=None) -> tuple:
         """

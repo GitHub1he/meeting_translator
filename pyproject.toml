@@ -16,7 +16,8 @@ dependencies = [
 
     # GUI / 图形界面
     "PyQt5>=5.15.9,<5.15.13",
-    "pyqt5-qt5>=5.15.2,<5.15.3",
+    "pyqt5-qt5>=5.15.2,<5.15.3; sys_platform != 'darwin'",
+    "pyqt5-qt5>=5.15.11; sys_platform == 'darwin'",
 
     # Windows WASAPI loopback support / Windows 环回音频支持
     "pyaudiowpatch>=0.2.12.8; sys_platform == 'win32'",

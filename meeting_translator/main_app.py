@@ -19,9 +19,9 @@ if sys.platform == 'win32':
 
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout,
-    QPushButton, QComboBox, QLabel, QGroupBox
+    QPushButton, QComboBox, QLabel, QGroupBox, QScrollArea
 )
-from PyQt5.QtCore import Qt, pyqtSignal, QObject, QMetaObject, pyqtSlot
+from PyQt5.QtCore import Qt, pyqtSignal, QObject, QMetaObject, pyqtSlot, QTimer
 from PyQt5.QtGui import QBrush, QColor
 from dotenv import load_dotenv
 
@@ -310,7 +310,8 @@ class MeetingTranslatorApp(QWidget):
     def init_ui(self):
         """初始化UI"""
         self.setWindowTitle(self.i18n.t("ui.main_window.title"))
-        self.setGeometry(100, 100, 700, 600)
+        self.resize(720, 660)
+        self.setMinimumSize(480, 520)
         self.setObjectName("MainWindow")
 
         layout = QVBoxLayout()
@@ -396,9 +397,13 @@ class MeetingTranslatorApp(QWidget):
 
         self.subtitle_btn = QPushButton(self.i18n.t("ui.buttons.subtitle_window"))
         self.subtitle_btn.setObjectName("secondaryButton")
-        self.subtitle_btn.setEnabled(False)
         self.subtitle_btn.clicked.connect(self.toggle_subtitle_window)
         s2t_provider_layout.addWidget(self.subtitle_btn)
+
+        self.context_btn = QPushButton(self.i18n.t("ui.buttons.context_assistant"))
+        self.context_btn.setObjectName("secondaryButton")
+        self.context_btn.clicked.connect(self.toggle_context_assistant)
+        s2t_provider_layout.addWidget(self.context_btn)
 
         s2t_layout.addLayout(s2t_provider_layout)
 
@@ -511,10 +516,30 @@ class MeetingTranslatorApp(QWidget):
         test_row.addWidget(self._test_vmic_combo, 1)
         s2s_layout.addLayout(test_row)
 
+        self.test_status_label = QLabel("测试状态：未运行")
+        self.test_status_label.setObjectName("deviceInfoLabel")
+        self.test_status_label.setWordWrap(True)
+        s2s_layout.addWidget(self.test_status_label)
+
         s2s_group.setLayout(s2s_layout)
         layout.addWidget(s2s_group)
 
-        self.setLayout(layout)
+        # 将所有内容放入可滚动区域，保证小屏也能完整显示
+        content = QWidget()
+        content.setObjectName("MainContent")
+        content.setLayout(layout)
+
+        scroll = QScrollArea()
+        scroll.setObjectName("MainScroll")
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setWidget(content)
+
+        outer_layout = QVBoxLayout()
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.addWidget(scroll)
+        self.setLayout(outer_layout)
 
     def update_status(self, text, status_type="ready"):
         """更新状态显示（已移除状态显示，此方法为兼容性保留）"""
@@ -1093,15 +1118,16 @@ class MeetingTranslatorApp(QWidget):
 
         self._auto_select_virtual_output(self.s2s_output_combo)
 
-        # 4. Load virtual mic combo for chain test (Voicemeeter/VB-Cable input devices)
+        # 4. Load virtual mic combo for chain test
         self._test_vmic_combo.clear()
         all_inputs = self.device_manager.get_input_devices()
         for d in all_inputs:
             n = d.get('name', '').lower()
-            if d.get('is_loopback'):
+            if d.get('is_loopback') and 'blackhole' not in n:
                 continue
-            is_virtual_in = any(k in n for k in [
-                'voicemeeter out', 'vb-audio voi', 'cable output', 'vb-cable'
+            is_virtual_in = d.get('is_virtual', False) or any(k in n for k in [
+                'voicemeeter out', 'vb-audio voi', 'cable output', 'vb-cable',
+                'blackhole'
             ])
             if is_virtual_in:
                 display_name = d.get('display_name', d['name'])
@@ -1284,6 +1310,17 @@ class MeetingTranslatorApp(QWidget):
 
     # ===== S2T 服务管理 =====
 
+    def _has_audio_feedback_risk(self, s2t_device=None, s2s_output_device=None) -> bool:
+        """判断 S2T 与 S2S 是否会通过同一虚拟设备形成音频回授。"""
+        s2t_device = s2t_device or self.s2t_device_combo.currentData()
+        s2s_output_device = s2s_output_device or self.s2s_output_combo.currentData()
+        if not s2t_device or not s2s_output_device:
+            return False
+
+        s2t_name = s2t_device.get("name", "").strip().lower()
+        s2s_output_name = s2s_output_device.get("name", "").strip().lower()
+        return bool(s2t_name and s2t_name == s2s_output_name)
+
     def _start_s2t_service(self):
         """启动 S2T 服务（字幕翻译）"""
         Out.status(self.i18n.t("status.starting_s2t"))
@@ -1293,11 +1330,21 @@ class MeetingTranslatorApp(QWidget):
         if not device:
             Out.user_alert(self.i18n.t("ui.messages.select_device_first_s2t"), self.i18n.t("ui.messages.device_not_selected"))
             return
+        if self._s2s_state == "running" and self._has_audio_feedback_risk(s2t_device=device):
+            Out.user_alert(
+                "S2T 输入与 S2S 输出使用了同一个虚拟设备，会造成回授和重复翻译。请为两个方向使用不同的虚拟音频设备或通道。",
+                "检测到音频回授风险"
+            )
+            return
+        if not device.get("is_loopback", False):
+            Out.warning(
+                f"S2T 当前使用 {device['name']}，这通常是麦克风而非会议音频。"
+                "如需翻译会议声音，请选择系统回环或 BlackHole 输入。"
+            )
 
         try:
-            # 1. 创建字幕窗口
-            if not self.subtitle_window:
-                self.subtitle_window = SubtitleWindow()
+            # 1. 创建并显示字幕窗口
+            self._ensure_subtitle_window()
             self.subtitle_window.show()
 
             # 2. 添加 SubtitleHandler
@@ -1346,7 +1393,6 @@ class MeetingTranslatorApp(QWidget):
 
             self.s2t_device_combo.setEnabled(False)
             self.s2t_provider_combo.setEnabled(False)
-            self.subtitle_btn.setEnabled(True)
 
             # Start Context Assistant
             self._start_context_assistant()
@@ -1388,7 +1434,6 @@ class MeetingTranslatorApp(QWidget):
 
         self.s2t_device_combo.setEnabled(True)
         self.s2t_provider_combo.setEnabled(True)
-        self.subtitle_btn.setEnabled(False)
 
         # Stop Context Assistant
         self._stop_context_assistant()
@@ -1398,55 +1443,83 @@ class MeetingTranslatorApp(QWidget):
 
     # ===== Context Assistant =====
 
-    def _start_context_assistant(self):
-        try:
-            from context_assistant.context_sidebar import ContextSidebar
-            from context_assistant.context_service import ContextService
-            from context_assistant.hotkey_manager import HotkeyManager
+    def _ensure_context_assistant(self):
+        """确保背景助手的侧边栏与服务已创建并接线（幂等，不负责显示）。"""
+        from context_assistant.context_sidebar import ContextSidebar
+        from context_assistant.context_service import ContextService
+        from context_assistant.hotkey_manager import HotkeyManager
 
-            if not self.context_sidebar:
-                self.context_sidebar = ContextSidebar()
+        if not self.context_sidebar:
+            self.context_sidebar = ContextSidebar()
+            self.context_sidebar.on_visibility_changed = lambda visible: self._sync_context_btn_label()
 
+        def get_history(max_items):
             if self.subtitle_window:
-                geo = self.subtitle_window.geometry()
-                sidebar_x = geo.right() + 10
-                sidebar_y = geo.top()
-                screen = QApplication.desktop().availableGeometry()
-                if sidebar_x + 380 > screen.right():
-                    sidebar_x = geo.left() - 390
-                if sidebar_x < screen.left():
-                    sidebar_x = screen.right() - 390
-                self.context_sidebar.move(sidebar_x, sidebar_y)
+                return self.subtitle_window.get_recent_history(max_items)
+            return []
 
-            self.context_sidebar.show()
+        def on_result(mode, content, error):
+            if self.context_sidebar:
+                self.context_sidebar.on_result(mode, content, error)
 
-            def get_history(max_items):
-                if self.subtitle_window:
-                    return self.subtitle_window.get_recent_history(max_items)
-                return []
-
-            def on_result(mode, content, error):
-                if self.context_sidebar:
-                    self.context_sidebar.on_result(mode, content, error)
-
+        if not self.context_service:
             self.context_service = ContextService(get_history, on_result)
 
-            self.context_sidebar.set_trigger_callback(self.context_service.trigger)
+        self.context_sidebar.set_trigger_callback(self.context_service.trigger)
 
-            if not self.hotkey_manager:
-                self.hotkey_manager = HotkeyManager()
-                self.hotkey_manager.register('f1', lambda: self.context_service.trigger('explain'))
-                self.hotkey_manager.register('f2', lambda: self.context_service.trigger('experience'))
-                self.hotkey_manager.register('f3', lambda: self.context_service.trigger('ammo'))
-                self.hotkey_manager.register('f4', lambda: self.context_service.trigger('reply'))
+        if not self.hotkey_manager:
+            self.hotkey_manager = HotkeyManager()
+            self.hotkey_manager.register('f1', lambda: self.context_service.trigger('explain'))
+            self.hotkey_manager.register('f2', lambda: self.context_service.trigger('experience'))
+            self.hotkey_manager.register('f3', lambda: self.context_service.trigger('ammo'))
+            self.hotkey_manager.register('f4', lambda: self.context_service.trigger('reply'))
 
+    def _position_context_sidebar(self):
+        """把侧边栏摆到字幕窗右侧（字幕窗可见时）。"""
+        if self.context_sidebar and self.subtitle_window and self.subtitle_window.isVisible():
+            geo = self.subtitle_window.geometry()
+            sidebar_x = geo.right() + 10
+            sidebar_y = geo.top()
+            screen = QApplication.desktop().availableGeometry()
+            if sidebar_x + 380 > screen.right():
+                sidebar_x = geo.left() - 390
+            if sidebar_x < screen.left():
+                sidebar_x = screen.right() - 390
+            self.context_sidebar.move(sidebar_x, sidebar_y)
+
+    def _sync_context_btn_label(self):
+        """根据侧边栏可见性切换主窗口按钮文案。"""
+        visible = bool(self.context_sidebar and self.context_sidebar.isVisible())
+        key = "ui.buttons.hide_context" if visible else "ui.buttons.context_assistant"
+        self.context_btn.setText(self.i18n.t(key))
+
+    def _start_context_assistant(self):
+        try:
+            self._ensure_context_assistant()
+            self._position_context_sidebar()
+            self.context_sidebar.show()
             self.hotkey_manager.enable()
-
+            self._sync_context_btn_label()
             Out.status(self.i18n.t("status.context_assistant_started"))
         except Exception as e:
             Out.error(f"Context Assistant start failed: {e}", exc_info=True)
 
+    def toggle_context_assistant(self):
+        """主窗口按钮：切换背景助手侧边栏显示/隐藏（不依赖 S2T）。"""
+        try:
+            self._ensure_context_assistant()
+            if self.context_sidebar.isVisible():
+                self.context_sidebar.hide()
+            else:
+                self._position_context_sidebar()
+                self.context_sidebar.show()
+                self.hotkey_manager.enable()
+            self._sync_context_btn_label()
+        except Exception as e:
+            Out.error(f"Context Assistant toggle failed: {e}", exc_info=True)
+
     def _stop_context_assistant(self):
+        """停止 S2T 时调用：禁用热键并隐藏侧边栏，但保留实例以便主窗口按钮继续可用。"""
         try:
             if self.hotkey_manager:
                 self.hotkey_manager.disable()
@@ -1454,11 +1527,10 @@ class MeetingTranslatorApp(QWidget):
             pass
         try:
             if self.context_sidebar:
-                self.context_sidebar.close()
-                self.context_sidebar = None
+                self.context_sidebar.hide()
         except Exception:
             pass
-        self.context_service = None
+        self._sync_context_btn_label()
 
     # ===== S2S 服务管理 =====
 
@@ -1475,6 +1547,12 @@ class MeetingTranslatorApp(QWidget):
         if not output_device:
             Out.user_alert(self.i18n.t("ui.messages.select_device_first_s2s_output", language=self.meeting_language), self.i18n.t("ui.messages.device_not_selected"))
             return
+        if self.s2t_is_running and self._has_audio_feedback_risk(s2s_output_device=output_device):
+            Out.user_alert(
+                "S2T 输入与 S2S 输出使用了同一个虚拟设备，会造成回授和重复翻译。请为两个方向使用不同的虚拟音频设备或通道。",
+                "检测到音频回授风险"
+            )
+            return
 
         try:
             api_output_rate = self.PROVIDER_OUTPUT_RATES.get(self.s2s_provider, 24000)
@@ -1485,7 +1563,7 @@ class MeetingTranslatorApp(QWidget):
                 input_sample_rate=api_output_rate,
                 output_sample_rate=output_device['sample_rate'],
                 channels=output_device['channels'],
-                enable_dynamic_speed=True,
+                enable_dynamic_speed=False,
                 max_speed=2.0,
                 queue_threshold=20,
                 target_catchup_time=10.0,
@@ -1584,6 +1662,7 @@ class MeetingTranslatorApp(QWidget):
             self.s2s_start_stop_btn.style().unpolish(self.s2s_start_stop_btn)
             self.s2s_start_stop_btn.style().polish(self.s2s_start_stop_btn)
             self._test_chain_btn.setEnabled(True)
+            self._test_chain_btn.setText("Test Chain")
             self._test_mic_btn.setEnabled(True)
             self.s2s_input_combo.setEnabled(True)
             self.s2s_output_combo.setEnabled(True)
@@ -1603,7 +1682,8 @@ class MeetingTranslatorApp(QWidget):
             self.s2s_provider_combo.setEnabled(False)
         elif state == "testing":
             self.s2s_start_stop_btn.setEnabled(False)
-            self._test_chain_btn.setEnabled(False)
+            self._test_chain_btn.setEnabled(True)
+            self._test_chain_btn.setText("Stop Test")
             self._test_mic_btn.setEnabled(False)
             self.s2s_input_combo.setEnabled(False)
             self.s2s_output_combo.setEnabled(False)
@@ -1612,31 +1692,56 @@ class MeetingTranslatorApp(QWidget):
 
     # ===== 字幕窗口 =====
 
+    def _sync_subtitle_btn_label(self, visible=None):
+        """根据字幕窗可见性同步主窗口按钮文案。"""
+        if visible is None:
+            visible = bool(self.subtitle_window and self.subtitle_window.isVisible())
+        key = "ui.buttons.hide_subtitle" if visible else "ui.buttons.subtitle_window"
+        self.subtitle_btn.setText(self.i18n.t(key))
+
+    def _ensure_subtitle_window(self):
+        """确保字幕窗已创建（幂等，不负责显示）。"""
+        if not self.subtitle_window:
+            self.subtitle_window = SubtitleWindow()
+            self.subtitle_window.on_visibility_changed = self._sync_subtitle_btn_label
+            self._update_subtitle_handler()
+
     def toggle_subtitle_window(self):
-        """显示/隐藏字幕窗口"""
-        if self.subtitle_window:
-            if self.subtitle_window.isVisible():
-                self.subtitle_window.hide()
-                self.subtitle_btn.setText(self.i18n.t("ui.buttons.subtitle_window"))
-            else:
-                self.subtitle_window.show()
-                self.subtitle_btn.setText(self.i18n.t("ui.buttons.hide_subtitle"))
+        """显示/隐藏字幕窗口（可在未启动 S2T 时使用）"""
+        self._ensure_subtitle_window()
+        if self.subtitle_window.isVisible():
+            self.subtitle_window.hide()
+        else:
+            self.subtitle_window.show()
 
     # ===== S2S 音频测试 =====
 
     def _test_mic_input(self):
+        if getattr(self, "_test_mic_recording", False):
+            self._test_mic_recording = False
+            self._set_test_status("麦克风测试：正在停止…")
+            self._test_mic_btn.setEnabled(False)
+            self._test_mic_btn.setText("Stopping...")
+            return
+
         device = self.s2s_input_combo.currentData()
         if not device:
             Out.user_alert("Please select a microphone first", "No Mic Selected")
             return
         if self._s2s_state != "idle":
             return
-        self._test_mic_btn.setEnabled(False)
+        self._test_mic_recording = True
+        self._test_pcm = b""
+        self._test_mic_status = "麦克风测试：正在准备录音。"
+        self._test_mic_btn.setText("Stop Mic")
         self._test_chain_btn.setEnabled(False)
         Out.status(f"[Test Mic] Recording 3s from {device['name']}...")
+        self._set_test_status("麦克风测试：录音中，请说话；再次点击 Stop Mic 可提前结束。")
 
         def worker():
+            pa = None
             try:
+                import time
                 import pyaudio as _pa
                 try:
                     import pyaudiowpatch as _pa
@@ -1651,33 +1756,50 @@ class MeetingTranslatorApp(QWidget):
 
                 stream = pa.open(format=_pa.paInt16, channels=channels, rate=rate,
                                  input=True, input_device_index=device['index'],
-                                 frames_per_buffer=chunk)
-                frames = [stream.read(chunk, exception_on_overflow=False) for _ in range(30)]
+                                 frames_per_buffer=chunk, start=False)
+                stream.start_stream()
+                frames = []
+                deadline = time.monotonic() + 3
+                while self._test_mic_recording and time.monotonic() < deadline:
+                    if stream.get_read_available() >= chunk:
+                        frames.append(stream.read(chunk, exception_on_overflow=False))
+                    else:
+                        time.sleep(0.02)
                 stream.stop_stream()
                 stream.close()
 
                 pcm = b''.join(frames)
+                if not pcm:
+                    self._test_mic_status = "麦克风测试失败：未读取到音频。"
+                    return
                 samples = _np.frombuffer(pcm, dtype=_np.int16)
                 max_val = int(_np.max(_np.abs(samples)))
                 rms = int(_np.sqrt(_np.mean(samples.astype(float) ** 2)))
 
                 if max_val < 50:
                     Out.status(f"[Test Mic] FAIL - No signal (max={max_val}). Mic muted?")
+                    self._test_mic_status = f"麦克风测试：失败，无信号（max={max_val}）。"
                 elif max_val < 500:
                     Out.status(f"[Test Mic] WARN - Weak signal (max={max_val}, rms={rms})")
+                    self._test_mic_status = f"麦克风测试：信号偏弱（max={max_val}, rms={rms}）。"
                 else:
                     Out.status(f"[Test Mic] OK - Good signal (max={max_val}, rms={rms})")
+                    self._test_mic_status = f"麦克风测试：信号正常（max={max_val}, rms={rms}）。"
 
                 self._test_pcm = pcm
                 self._test_rate = rate
                 self._test_channels = channels
-                self._playback_test_audio()
-                pa.terminate()
             except Exception as e:
                 Out.error(f"[Test Mic] Error: {e}")
+                self._test_mic_status = f"麦克风测试出错：{e}"
             finally:
+                if pa:
+                    try:
+                        pa.terminate()
+                    except Exception:
+                        pass
                 QMetaObject.invokeMethod(
-                    self, "_restore_test_buttons", Qt.QueuedConnection
+                    self, "_finish_test_mic", Qt.QueuedConnection
                 )
 
         import threading
@@ -1690,6 +1812,15 @@ class MeetingTranslatorApp(QWidget):
                 self.config_manager.set_test_vmic_display(device['display_name'])
 
     def _test_s2s_chain(self):
+        if getattr(self, "_test_chain_capturing", False):
+            Out.status("[Test Chain] Cancellation requested...")
+            self._test_chain_capturing = False
+            self._test_chain_btn.setEnabled(False)
+            self._test_chain_btn.setText("Stopping...")
+            self._set_test_status("链路测试：正在停止…")
+            self._finish_test_chain()
+            return
+
         if self._s2s_state != "idle":
             if self._s2s_state == "running":
                 Out.user_alert("S2S is already running. Please stop it first.", "S2S Running")
@@ -1710,26 +1841,16 @@ class MeetingTranslatorApp(QWidget):
 
         self._s2s_state = "testing"
         self._test_chain_capturing = True
+        self._test_chain_finalized = False
         self._update_s2s_ui_state("testing")
 
         provider = self.s2s_provider
-        Out.status(f"[Test Chain] Starting 8s S2S test with provider={provider}...")
-        Out.status("[Test Chain] Speak continuously into your mic! API errors are normal for short/silent input.")
+        Out.status(f"[Test Chain] Starting S2S test with provider={provider}...")
+        Out.status("[Test Chain] Speak continuously into your mic, then click Stop Test to finish.")
+        self._set_test_status("链路测试：运行中，请持续说话；点击 Stop Test 后停止并分析结果。")
 
-        try:
-            import pyaudiowpatch as _pa_mod
-        except ImportError:
-            import pyaudio as _pa_mod
-
-        vin_pa = _pa_mod.PyAudio()
         vin_rate = int(vin_dev['sample_rate'])
         vin_ch = min(vin_dev['channels'], 2)
-        in_chunk = int(vin_rate * 0.1)
-        vin_stream = vin_pa.open(
-            format=_pa_mod.paInt16, channels=vin_ch, rate=vin_rate,
-            input=True, input_device_index=vin_dev['index'],
-            frames_per_buffer=in_chunk
-        )
 
         try:
             self._start_s2s_service()
@@ -1737,83 +1858,116 @@ class MeetingTranslatorApp(QWidget):
             Out.status(f"[Test Chain] S2S start failed: {e}")
             if self._s2s_state == "running":
                 self._stop_s2s_service()
-            try:
-                vin_stream.stop_stream()
-                vin_stream.close()
-                vin_pa.terminate()
-            except Exception:
-                pass
             self._s2s_state = "idle"
             self._update_s2s_ui_state("idle")
             return
 
         if self._s2s_state != "running":
-            try:
-                vin_stream.stop_stream()
-                vin_stream.close()
-                vin_pa.terminate()
-            except Exception:
-                pass
             self._s2s_state = "idle"
             self._update_s2s_ui_state("idle")
             return
 
         import threading
-        captured = []
+        self._test_chain_pcm = b""
+        self._test_chain_error = None
+        self._test_chain_rate = vin_rate
+        self._test_chain_channels = vin_ch
 
-        def capture_loop():
-            while self._test_chain_capturing:
-                try:
-                    captured.append(vin_stream.read(in_chunk, exception_on_overflow=False))
-                except Exception:
-                    break
-
-        cap_thread = threading.Thread(target=capture_loop, daemon=True)
-        cap_thread.start()
-
-        def stop_and_playback():
+        def capture_and_finish():
             import time
-            time.sleep(8)
-            self._test_chain_capturing = False
-            cap_thread.join(timeout=2)
-
+            vin_pa = None
+            vin_stream = None
             try:
-                vin_stream.stop_stream()
-                vin_stream.close()
-                vin_pa.terminate()
-            except Exception:
-                pass
-
-            Out.status("[Test Chain] Stopping S2S pipeline...")
-            if self._s2s_state == "running":
                 try:
-                    self._stop_s2s_service()
-                except Exception as e:
-                    Out.error(f"[Test Chain] Stop failed: {e}")
+                    import pyaudiowpatch as _pa_mod
+                except ImportError:
+                    import pyaudio as _pa_mod
 
-            if captured:
-                import numpy as _np
-                pcm = b''.join(captured)
-                samples = _np.frombuffer(pcm, dtype=_np.int16)
-                max_val = int(_np.max(_np.abs(samples))) if len(samples) > 0 else 0
+                vin_pa = _pa_mod.PyAudio()
+                in_chunk = int(vin_rate * 0.1)
+                vin_stream = vin_pa.open(
+                    format=_pa_mod.paInt16, channels=vin_ch, rate=vin_rate,
+                    input=True, input_device_index=vin_dev['index'],
+                    frames_per_buffer=in_chunk, start=False
+                )
+                vin_stream.start_stream()
 
-                if max_val < 50:
-                    Out.status(f"[Test Chain] FAIL - No audio at virtual mic (max={max_val})")
-                    Out.status("[Test Chain] S2S ran but nothing reached virtual mic. Check Voicemeeter routing.")
-                else:
-                    Out.status(f"[Test Chain] OK - Audio captured (max={max_val}). Playing back...")
-                    self._chain_pcm = pcm
-                    self._chain_rate = vin_rate
-                    self._chain_channels = vin_ch
-                    self._playback_chain_audio()
+                captured = []
+                while self._test_chain_capturing:
+                    if vin_stream.get_read_available() >= in_chunk:
+                        captured.append(vin_stream.read(in_chunk, exception_on_overflow=False))
+                    else:
+                        time.sleep(0.02)
+                self._test_chain_pcm = b''.join(captured)
+            except Exception as e:
+                self._test_chain_error = str(e)
+            finally:
+                self._test_chain_capturing = False
+                if vin_stream:
+                    try:
+                        vin_stream.stop_stream()
+                        vin_stream.close()
+                    except Exception:
+                        pass
+                if vin_pa:
+                    try:
+                        vin_pa.terminate()
+                    except Exception:
+                        pass
+                QMetaObject.invokeMethod(self, "_finish_test_chain", Qt.QueuedConnection)
+
+        threading.Thread(target=capture_and_finish, daemon=True).start()
+
+    @pyqtSlot()
+    def _finish_test_chain(self):
+        """在主线程停止 S2S，并处理后台线程采集的测试音频。"""
+        if getattr(self, "_test_chain_finalized", False):
+            return
+        self._test_chain_finalized = True
+        Out.status("[Test Chain] Stopping S2S pipeline...")
+        if self._s2s_state == "running":
+            try:
+                self._stop_s2s_service()
+            except Exception as e:
+                Out.error(f"[Test Chain] Stop failed: {e}")
+
+        if self._test_chain_error:
+            Out.error(f"[Test Chain] Virtual mic capture failed: {self._test_chain_error}")
+            self._set_test_status(f"链路测试出错：{self._test_chain_error}")
+        elif self._test_chain_pcm:
+            import numpy as _np
+            samples = _np.frombuffer(self._test_chain_pcm, dtype=_np.int16)
+            max_val = int(_np.max(_np.abs(samples))) if len(samples) > 0 else 0
+            if max_val < 50:
+                Out.status(f"[Test Chain] FAIL - No audio at virtual mic (max={max_val})")
+                Out.status("[Test Chain] S2S ran but nothing reached virtual mic. Check virtual audio routing.")
+                self._set_test_status(f"链路测试失败：虚拟麦克风无信号（max={max_val}）。")
             else:
-                Out.status("[Test Chain] FAIL - No audio captured from virtual mic")
+                Out.status(f"[Test Chain] OK - Audio captured (max={max_val}). Playing back...")
+                self._chain_pcm = self._test_chain_pcm
+                self._chain_rate = self._test_chain_rate
+                self._chain_channels = self._test_chain_channels
+                self._playback_chain_audio()
+                self._set_test_status(f"链路测试成功：已捕获音频（max={max_val}），正在回放。")
+        else:
+            Out.status("[Test Chain] FAIL - No audio captured from virtual mic")
+            self._set_test_status("链路测试失败：未从虚拟麦克风捕获音频。")
 
-            QMetaObject.invokeMethod(
-                self, "_enable_test_chain_buttons", Qt.QueuedConnection
-            )
+        self._enable_test_chain_buttons()
 
-        threading.Thread(target=stop_and_playback, daemon=True).start()
+    @pyqtSlot()
+    def _finish_test_mic(self):
+        self._test_mic_recording = False
+        self._set_test_status(getattr(self, "_test_mic_status", "麦克风测试已完成。"))
+        if self._test_pcm:
+            self._playback_test_audio()
+        self._test_mic_btn.setText("Test Mic")
+        self._test_mic_btn.setEnabled(True)
+        if self._s2s_state == "idle":
+            self._test_chain_btn.setEnabled(True)
+
+    def _set_test_status(self, text: str):
+        self.test_status_label.setText(f"测试状态：{text}")
 
     def _playback_test_audio(self):
         if not hasattr(self, '_test_pcm'):
@@ -1908,6 +2062,9 @@ class MeetingTranslatorApp(QWidget):
 
         # 关闭 Context Assistant
         self._stop_context_assistant()
+        if self.context_sidebar:
+            self.context_sidebar.close()
+            self.context_sidebar = None
 
         # 清理设备管理器
         if self.device_manager:

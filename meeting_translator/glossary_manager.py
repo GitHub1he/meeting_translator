@@ -58,14 +58,7 @@ class GlossaryManager:
         return result
 
     def _get_default_glossary(self) -> List[Dict[str, str]]:
-        return [
-            {"zh": "人工智能", "en": "Artificial Intelligence"},
-            {"zh": "机器学习", "en": "Machine Learning"},
-            {"zh": "深度学习", "en": "Deep Learning"},
-            {"zh": "自然语言处理", "en": "Natural Language Processing"},
-            {"zh": "语音识别", "en": "Speech Recognition"},
-            {"zh": "同声传译", "en": "Simultaneous Interpretation"},
-        ]
+        return []
 
     def build_for_direction(self, source_lang: str, target_lang: str) -> Dict[str, str]:
         """

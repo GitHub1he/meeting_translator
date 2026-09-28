@@ -281,3 +281,36 @@ QScrollBar::add-line:horizontal,
 QScrollBar::sub-line:horizontal {
     width: 0px;
 }
+
+/* ==================== 主滚动区（小屏自适应） ==================== */
+QScrollArea#MainScroll {
+    background: transparent;
+    border: none;
+}
+
+QScrollArea#MainScroll > QWidget > QWidget {
+    background: transparent;
+}
+
+QWidget#MainContent {
+    background-color: #FAFAFA;
+}
+
+/* ==================== 图标按钮（紧凑，如试听 ▶） ==================== */
+QPushButton#iconButton {
+    background-color: #2196F3;
+    color: #FFFFFF;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-weight: bold;
+    min-height: 30px;
+}
+
+QPushButton#iconButton:hover {
+    background-color: #1976D2;
+}
+
+QPushButton#iconButton:pressed {
+    background-color: #0D47A1;
+}

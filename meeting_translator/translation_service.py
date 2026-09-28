@@ -6,6 +6,7 @@
 import asyncio
 import sys
 import os
+import threading
 from typing import Optional, Callable
 
 # 添加 poc 目录到路径
@@ -43,6 +44,7 @@ class MeetingTranslationService:
         self.is_running = False
         self.message_task = None
         self._audio_forward_thread = None
+        self._audio_send_lock = asyncio.Lock()
 
     async def start(self):
         """启动翻译服务"""
@@ -122,10 +124,11 @@ class MeetingTranslationService:
         Args:
             audio_data: PCM 音频数据（16000 Hz, 单声道, 16-bit）
         """
-        if not self.is_running or not self.client:
-            return
+        async with self._audio_send_lock:
+            if not self.is_running or not self.client or not self.client.is_connected:
+                return
 
-        await self.client.send_audio_chunk(audio_data)
+            await self.client.send_audio_chunk(audio_data)
 
     async def _run_with_auto_reconnect(self):
         """
@@ -174,7 +177,7 @@ class MeetingTranslationService:
                         voice=self.voice,
                         audio_enabled=self.audio_enabled,
                         audio_queue=audio_queue,
-                        glossary=None
+                        glossary=self.glossary
                     )
 
                     # 重新连接
@@ -280,6 +283,7 @@ class MeetingTranslationServiceWrapper:
         self.loop = None
         self.thread = None
         self.is_running = False
+        self._audio_send_pending = threading.Lock()
 
     def start(self):
         """启动翻译服务（同步方法）"""
@@ -371,11 +375,20 @@ class MeetingTranslationServiceWrapper:
         if not self.is_running or not self.service or not self.loop:
             return
 
-        # 在事件循环中执行
-        asyncio.run_coroutine_threadsafe(
-            self.service.send_audio_chunk(audio_data),
-            self.loop
-        )
+        # 音频回调可能比网络发送更快；只保留一个待发送块，避免断线时堆积旧任务。
+        if not self._audio_send_pending.acquire(blocking=False):
+            return
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                self.service.send_audio_chunk(audio_data),
+                self.loop
+            )
+        except RuntimeError:
+            self._audio_send_pending.release()
+            return
+
+        future.add_done_callback(lambda _: self._audio_send_pending.release())
 
 
 # 测试代码

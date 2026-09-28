@@ -1,4 +1,5 @@
 import logging
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -12,6 +13,9 @@ class HotkeyManager:
     def _ensure_keyboard(self):
         if self._keyboard is not None:
             return True
+        if sys.platform == "darwin":
+            logger.warning("Global hotkeys are disabled on macOS: the 'keyboard' package crashes the process while reading the keyboard layout. Context assistant hotkeys unavailable.")
+            return False
         try:
             import keyboard
             self._keyboard = keyboard
